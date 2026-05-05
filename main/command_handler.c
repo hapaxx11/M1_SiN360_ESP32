@@ -9,6 +9,7 @@
 #include "ble_ops.h"
 
 static const char *TAG = "cmd_handler";
+static const char *FW_NAME = "SiN360-0.9.0.8";
 
 static void cmd_ping(const m1_cmd_t *cmd, m1_resp_t *resp)
 {
@@ -20,16 +21,19 @@ static void cmd_ping(const m1_cmd_t *cmd, m1_resp_t *resp)
 
 static void cmd_get_status(const m1_cmd_t *cmd, m1_resp_t *resp)
 {
+    m1_esp32_status_payload_t status_payload;
+
     (void)cmd;
     resp->status = RESP_OK;
 
-    /* Payload: [fw_major, fw_minor, fw_patch, wifi_state, ble_state] */
-    resp->payload[0] = 1;  /* FW v1.0.0 */
-    resp->payload[1] = 0;
-    resp->payload[2] = 0;
-    resp->payload[3] = 0;  /* TODO: actual wifi state */
-    resp->payload[4] = 0;  /* TODO: actual ble state */
-    resp->payload_len = 5;
+    memset(&status_payload, 0, sizeof(status_payload));
+    status_payload.proto_ver = M1_ESP32_CAPS_PROTO_VER;
+    status_payload.at_cmd_bitmap = M1_AT_CMD_PROFILE_SIN360;
+    status_payload.ext_bitmap = M1_EXT_CMD_PROFILE_SIN360;
+    strncpy(status_payload.fw_name, FW_NAME, sizeof(status_payload.fw_name) - 1);
+
+    memcpy(resp->payload, &status_payload, sizeof(status_payload));
+    resp->payload_len = sizeof(status_payload);
 }
 
 void cmd_handle(const m1_cmd_t *cmd, m1_resp_t *resp)

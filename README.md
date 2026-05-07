@@ -10,11 +10,11 @@ This firmware runs on the M1's ESP32-C6 and provides the WiFi/BLE backend used b
 
 ## Compatibility
 
-This release is intended to pair with **M1 SiN360 STM32 firmware v0.9.0.8**.
+This release pairs with **M1 SiN360 STM32 firmware v0.9.0.9** and later STM32 releases that do not change the WiFi/BLE SPI command protocol.
 
-STM32 release page:
+STM32 releases:
 
-<https://github.com/sincere360/M1_SiN360/releases/tag/v0.9.0.8>
+<https://github.com/sincere360/M1_SiN360/releases>
 
 ## Features
 
@@ -22,6 +22,7 @@ STM32 release page:
 - WiFi AP scan and station scan support
 - Packet monitor/sniffer support for beacon, probe, deauth, EAPOL, SAE, Pwnagotchi, and raw packet counts
 - Deauth, multi-target deauth, beacon spam, AP clone, Rickroll beacon, and probe request flood
+- ESP32-C6 deauth support with patched WiFi library helper
 - Karma and Karma Portal support
 - Evil Portal captive DNS/HTTP service with credential capture
 - Custom Evil Portal HTML upload from STM32/SD card with a 32KB limit
@@ -43,9 +44,19 @@ STM32 release page:
 
 ## Build
 
+Run this once after installing or updating ESP-IDF:
+
 ```bash
-cd ~/Documents/m1_esp32
-. ~/Documents/esp-idf/export.sh
+cd /path/to/m1_esp32
+. /path/to/esp-idf/export.sh
+tools/patch-libnet80211.sh
+```
+
+Release binaries are already built with this deauth support. This patch step is only needed when compiling the ESP32 firmware from source.
+
+```bash
+cd /path/to/m1_esp32
+. /path/to/esp-idf/export.sh
 idf.py set-target esp32c6
 idf.py build
 ```
@@ -86,6 +97,8 @@ build/m1_esp32_merged.md5
 The `.md5` file must be exactly 32 uppercase hex characters with no newline.
 
 ## Notes
+
+Deauth patch credit: neddy299
 
 WiFi promiscuous mode and BLE advertising share the ESP32-C6 radio. The firmware stops conflicting modes before starting new WiFi/BLE operations, but user-facing flows should still avoid running WiFi sniffers and BLE advertising at the same time.
 

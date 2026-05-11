@@ -9,7 +9,7 @@
 #include "ble_ops.h"
 
 static const char *TAG = "cmd_handler";
-static const char *FW_NAME = "SiN360-0.9.0.8";
+static const char *FW_NAME = "SiN360-0.9.0.9";
 
 static void cmd_ping(const m1_cmd_t *cmd, m1_resp_t *resp)
 {

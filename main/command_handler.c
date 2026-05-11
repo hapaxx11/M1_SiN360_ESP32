@@ -28,8 +28,7 @@ static void cmd_get_status(const m1_cmd_t *cmd, m1_resp_t *resp)
 
     memset(&status_payload, 0, sizeof(status_payload));
     status_payload.proto_ver = M1_ESP32_CAPS_PROTO_VER;
-    status_payload.at_cmd_bitmap = M1_AT_CMD_PROFILE_SIN360;
-    status_payload.ext_bitmap = M1_EXT_CMD_PROFILE_SIN360;
+    status_payload.cap_bitmap = M1_ESP32_CAP_PROFILE_SIN360;
     strncpy(status_payload.fw_name, FW_NAME, sizeof(status_payload.fw_name) - 1);
 
     memcpy(resp->payload, &status_payload, sizeof(status_payload));

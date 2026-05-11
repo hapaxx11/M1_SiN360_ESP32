@@ -64,7 +64,11 @@
 /* Bits 17-63 reserved for future use */
 
 /* Capability profile reported by this firmware in CMD_GET_STATUS.
- * Lists every capability the SiN360 ESP32-C6 firmware actually implements. */
+ * Lists every M1_ESP32_CAP_* bit that the SiN360 ESP32-C6 firmware
+ * actually implements.  The remaining bits (BT_MANAGE, 802154) are
+ * defined above only for protocol parity with the STM32-side
+ * `m1_esp32_caps.h` — this firmware does not provide those features
+ * and intentionally leaves the corresponding bits clear. */
 #define M1_ESP32_CAP_PROFILE_SIN360 \
     (M1_ESP32_CAP_WIFI_SCAN     | \
      M1_ESP32_CAP_STA_SCAN      | \

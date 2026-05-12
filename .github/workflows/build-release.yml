@@ -20,7 +20,7 @@ jobs:
   build-and-release:
     runs-on: ubuntu-latest
     container:
-      image: espressif/idf:latest
+      image: espressif/idf:v5.5
 
     steps:
       - name: Checkout repository
@@ -34,13 +34,17 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git remote set-url origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
 
       - name: Bump version
         id: version
         run: |
           VERSION=$(cat version.txt 2>/dev/null | tr -d '[:space:]')
           VERSION="${VERSION:-1.0.0}"
+
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "ERROR: version.txt must contain a version in MAJOR.MINOR.PATCH format (e.g. 1.2.3), got: '$VERSION'"
+            exit 1
+          fi
           MAJOR=$(echo "$VERSION" | cut -d. -f1)
           MINOR=$(echo "$VERSION" | cut -d. -f2)
           PATCH=$(echo "$VERSION" | cut -d. -f3)
@@ -56,6 +60,12 @@ jobs:
           echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=v$NEW_VERSION" >> "$GITHUB_OUTPUT"
           echo "Bumped to version $NEW_VERSION"
+
+      - name: Patch libnet80211 (deauth support)
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh"
+          tools/patch-libnet80211.sh
 
       - name: Build firmware
         shell: bash

@@ -1,0 +1,140 @@
+name: Build and Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version bump type'
+        required: false
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+
+      - name: Bump version
+        id: version
+        run: |
+          VERSION=$(cat version.txt 2>/dev/null || echo "1.0.0")
+          MAJOR=$(echo "$VERSION" | cut -d. -f1)
+          MINOR=$(echo "$VERSION" | cut -d. -f2)
+          PATCH=$(echo "$VERSION" | cut -d. -f3)
+
+          case "${{ github.event.inputs.bump }}" in
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            *)     PATCH=$((PATCH + 1)) ;;
+          esac
+
+          NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+          echo "$NEW_VERSION" > version.txt
+          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Bumped to version $NEW_VERSION"
+
+      - name: Build firmware
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh"
+          idf.py build
+
+      - name: Create merged binary
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh"
+          esptool.py --chip esp32c6 merge_bin \
+            -o "build/m1_esp32_v${{ steps.version.outputs.version }}.bin" \
+            0x0     build/bootloader/bootloader.bin \
+            0x8000  build/partition_table/partition-table.bin \
+            0x10000 build/m1_esp32.bin
+
+      - name: Commit version bump and push tag
+        run: |
+          git add version.txt
+          git commit -m "chore: bump version to ${{ steps.version.outputs.version }} [skip ci]"
+          git tag "${{ steps.version.outputs.tag }}"
+          git push origin HEAD
+          git push origin "${{ steps.version.outputs.tag }}"
+
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          PAYLOAD=$(python3 << 'PYEOF'
+          import json, os
+          v = os.environ['VERSION']
+          t = os.environ['TAG']
+          body = (
+              f'## M1 SiN360 ESP32 Firmware {v}\n\n'
+              'Built automatically via GitHub Actions.\n\n'
+              '### Flash merged binary (recommended)\n'
+              '```\n'
+              f'esptool.py --chip esp32c6 write_flash 0x0 m1_esp32_v{v}.bin\n'
+              '```\n\n'
+              '### Individual binaries\n'
+              '| File | Address |\n'
+              '|------|---------|\n'
+              '| `bootloader.bin` | `0x0` |\n'
+              '| `partition-table.bin` | `0x8000` |\n'
+              '| `m1_esp32.bin` | `0x10000` |\n'
+          )
+          print(json.dumps({
+              'tag_name': t,
+              'name': f'Release {v}',
+              'body': body,
+              'draft': False,
+              'prerelease': False,
+          }))
+          PYEOF
+          )
+
+          RELEASE=$(curl -sf -X POST \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://api.github.com/repos/$REPO/releases" \
+            -d "$PAYLOAD")
+
+          UPLOAD_URL=$(echo "$RELEASE" | python3 -c "
+          import sys, json
+          print(json.load(sys.stdin)['upload_url'].split('{')[0])
+          ")
+
+          for FILE in \
+            "build/m1_esp32_v${VERSION}.bin" \
+            "build/m1_esp32.bin" \
+            "build/bootloader/bootloader.bin" \
+            "build/partition_table/partition-table.bin"; do
+            NAME=$(basename "$FILE")
+            curl -sf -X POST \
+              -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Content-Type: application/octet-stream" \
+              "${UPLOAD_URL}?name=${NAME}" \
+              --data-binary "@$FILE"
+          done

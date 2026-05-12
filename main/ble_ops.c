@@ -1296,23 +1296,6 @@ void ble_gatt_subscribe(const m1_cmd_t *cmd, m1_resp_t *resp)
         }
     }
 
-    if (cccd_handle == 0 && mode == 1) {
-        rc = enable ? ble_gattc_register_for_notification(ble_gatt_conn_handle, handle) :
-                      ble_gattc_unregister_for_notification(ble_gatt_conn_handle, handle);
-        if (rc != 0) {
-            ESP_LOGE(TAG, "GATT notify %s failed: %d", enable ? "enable" : "disable", rc);
-            resp->status = RESP_ERR;
-            return;
-        }
-
-        if (enable) {
-            ble_gatt_notify_reset();
-        }
-        resp->status = RESP_OK;
-        resp->payload_len = 0;
-        return;
-    }
-
     if (cccd_handle == 0 || !ble_gatt_sem) {
         resp->status = RESP_ERR;
         return;

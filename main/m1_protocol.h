@@ -14,6 +14,78 @@
 #define CMD_PING              0x01
 #define CMD_GET_STATUS        0x02
 
+/* CMD_GET_STATUS payload (protocol version 1)
+ *
+ * The status payload reports a single transport-agnostic capability bitmap.
+ * Each M1_ESP32_CAP_* bit corresponds to a named feature the firmware
+ * supports, regardless of how it is implemented internally (binary SPI
+ * command vs. AT text command).  The host (STM32) gates ESP32-dependent
+ * features at runtime by checking these bits.
+ *
+ * Bit assignments here MUST match the M1 STM32 `m1_esp32_caps.h`
+ * definitions exactly — they are part of the wire protocol.
+ */
+#define M1_ESP32_CAPS_PROTO_VER 1u
+
+/* WiFi scan (AP discovery) */
+#define M1_ESP32_CAP_WIFI_SCAN      (1ull <<  0)
+/* Station scan (promiscuous client discovery) */
+#define M1_ESP32_CAP_STA_SCAN       (1ull <<  1)
+/* BLE scan */
+#define M1_ESP32_CAP_BLE_SCAN       (1ull <<  2)
+/* BLE advertisement (custom adv payloads, spam, spoofing) */
+#define M1_ESP32_CAP_BLE_ADV        (1ull <<  3)
+/* WiFi deauthentication attack */
+#define M1_ESP32_CAP_DEAUTH         (1ull <<  4)
+/* Beacon flooding / clone / rickroll */
+#define M1_ESP32_CAP_BEACON         (1ull <<  5)
+/* Probe request flooding */
+#define M1_ESP32_CAP_PROBE_FLOOD    (1ull <<  6)
+/* Karma access-point impersonation + optional captive portal */
+#define M1_ESP32_CAP_KARMA          (1ull <<  7)
+/* Packet sniffer / monitor mode */
+#define M1_ESP32_CAP_PKTMON         (1ull <<  8)
+/* Evil portal (custom captive HTML + credential capture) */
+#define M1_ESP32_CAP_PORTAL         (1ull <<  9)
+/* WiFi station join / disconnect */
+#define M1_ESP32_CAP_WIFI_JOIN      (1ull << 10)
+/* WiFi MAC address spoofing */
+#define M1_ESP32_CAP_WIFI_SET_MAC   (1ull << 11)
+/* WiFi channel override */
+#define M1_ESP32_CAP_WIFI_SET_CHAN  (1ull << 12)
+/* Network scanner (ping / ARP / port / SSH / Telnet) */
+#define M1_ESP32_CAP_NETSCAN        (1ull << 13)
+/* BLE HID keyboard emulation (Bad-BT) */
+#define M1_ESP32_CAP_BLE_HID        (1ull << 14)
+/* Bluetooth device management (saved devices, BT info) */
+#define M1_ESP32_CAP_BT_MANAGE      (1ull << 15)
+/* IEEE 802.15.4 / Zigbee / Thread */
+#define M1_ESP32_CAP_802154         (1ull << 16)
+/* Bits 17-63 reserved for future use */
+
+/* Capability profile reported by this firmware in CMD_GET_STATUS.
+ * Lists every M1_ESP32_CAP_* bit that the SiN360 ESP32-C6 firmware
+ * actually implements.  The remaining bits (BT_MANAGE, 802154) are
+ * defined above only for protocol parity with the STM32-side
+ * `m1_esp32_caps.h` — this firmware does not provide those features
+ * and intentionally leaves the corresponding bits clear. */
+#define M1_ESP32_CAP_PROFILE_SIN360 \
+    (M1_ESP32_CAP_WIFI_SCAN     | \
+     M1_ESP32_CAP_STA_SCAN      | \
+     M1_ESP32_CAP_BLE_SCAN      | \
+     M1_ESP32_CAP_BLE_ADV       | \
+     M1_ESP32_CAP_DEAUTH        | \
+     M1_ESP32_CAP_BEACON        | \
+     M1_ESP32_CAP_PROBE_FLOOD   | \
+     M1_ESP32_CAP_KARMA         | \
+     M1_ESP32_CAP_PKTMON        | \
+     M1_ESP32_CAP_PORTAL        | \
+     M1_ESP32_CAP_WIFI_JOIN     | \
+     M1_ESP32_CAP_WIFI_SET_MAC  | \
+     M1_ESP32_CAP_WIFI_SET_CHAN | \
+     M1_ESP32_CAP_NETSCAN       | \
+     M1_ESP32_CAP_BLE_HID)
+
 /* WiFi scan (preserve existing functionality) */
 #define CMD_WIFI_SCAN_START   0x10
 #define CMD_WIFI_SCAN_NEXT    0x11
@@ -123,5 +195,13 @@ typedef struct {
     uint8_t  payload[M1_MAX_PAYLOAD];
 } __attribute__((packed)) m1_resp_t;
 
+typedef struct {
+    uint8_t  proto_ver;
+    uint8_t  cap_bitmap[8]; /* little-endian M1_ESP32_CAP_* bits */
+    char     fw_name[32];
+} __attribute__((packed)) m1_esp32_status_payload_t;
+
 _Static_assert(sizeof(m1_cmd_t) == 64, "m1_cmd_t must be 64 bytes");
 _Static_assert(sizeof(m1_resp_t) == 64, "m1_resp_t must be 64 bytes");
+_Static_assert(sizeof(m1_esp32_status_payload_t) == 41,
+               "m1_esp32_status_payload_t must be 41 bytes");

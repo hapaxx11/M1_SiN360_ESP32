@@ -197,7 +197,7 @@ typedef struct {
 
 typedef struct {
     uint8_t  proto_ver;
-    uint64_t cap_bitmap;
+    uint8_t  cap_bitmap[8]; /* little-endian M1_ESP32_CAP_* bits */
     char     fw_name[32];
 } __attribute__((packed)) m1_esp32_status_payload_t;
 

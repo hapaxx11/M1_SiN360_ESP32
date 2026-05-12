@@ -22,13 +22,16 @@ static void cmd_ping(const m1_cmd_t *cmd, m1_resp_t *resp)
 static void cmd_get_status(const m1_cmd_t *cmd, m1_resp_t *resp)
 {
     m1_esp32_status_payload_t status_payload;
+    uint64_t caps = M1_ESP32_CAP_PROFILE_SIN360;
 
     (void)cmd;
     resp->status = RESP_OK;
 
     memset(&status_payload, 0, sizeof(status_payload));
     status_payload.proto_ver = M1_ESP32_CAPS_PROTO_VER;
-    status_payload.cap_bitmap = M1_ESP32_CAP_PROFILE_SIN360;
+    for (int i = 0; i < 8; i++) {
+        status_payload.cap_bitmap[i] = (uint8_t)((caps >> (8 * i)) & 0xFF);
+    }
     strncpy(status_payload.fw_name, FW_NAME, sizeof(status_payload.fw_name) - 1);
 
     memcpy(resp->payload, &status_payload, sizeof(status_payload));

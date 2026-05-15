@@ -82,7 +82,7 @@ jobs:
             0x0     build/bootloader/bootloader.bin \
             0x8000  build/partition_table/partition-table.bin \
             0x10000 build/m1_esp32.bin
-          md5sum build/m1_esp32_merged.bin | awk '{print $1}' > build/m1_esp32_merged.md5
+          printf '%s' "$(md5sum build/m1_esp32_merged.bin | awk '{print $1}' | tr '[:lower:]' '[:upper:]')" > build/m1_esp32_merged.md5
 
       - name: Commit version bump and push tag
         run: |

@@ -98,54 +98,81 @@ jobs:
           TAG: ${{ steps.version.outputs.tag }}
           REPO: ${{ github.repository }}
         run: |
-          PAYLOAD=$(python3 << 'PYEOF'
-          import json, os
-          v = os.environ['VERSION']
-          t = os.environ['TAG']
+          python3 <<'PYEOF'
+          import json
+          import os
+          import urllib.request
+
+          version = os.environ["VERSION"]
+          tag = os.environ["TAG"]
+          repo = os.environ["REPO"]
+          token = os.environ["GITHUB_TOKEN"]
+
           body = (
-              f'## M1 SiN360 ESP32 Firmware {v}\n\n'
-              'Built automatically via GitHub Actions.\n\n'
-              '### Flash merged binary (recommended)\n'
-              '```\n'
-              f'esptool.py --chip esp32c6 write_flash 0x0 m1_esp32_v{v}.bin\n'
-              '```\n\n'
-              '### Individual binaries\n'
-              '| File | Address |\n'
-              '|------|---------|\n'
-              '| `bootloader.bin` | `0x0` |\n'
-              '| `partition-table.bin` | `0x8000` |\n'
-              '| `m1_esp32.bin` | `0x10000` |\n'
+              f"## M1 SiN360 ESP32 Firmware {version}\n\n"
+              "Built automatically via GitHub Actions.\n\n"
+              "### Flash merged binary (recommended)\n"
+              "```\n"
+              f"esptool.py --chip esp32c6 write_flash 0x0 m1_esp32_v{version}.bin\n"
+              "```\n\n"
+              "### Individual binaries\n"
+              "| File | Address |\n"
+              "|------|---------|\n"
+              "| `bootloader.bin` | `0x0` |\n"
+              "| `partition-table.bin` | `0x8000` |\n"
+              "| `m1_esp32.bin` | `0x10000` |\n"
           )
-          print(json.dumps({
-              'tag_name': t,
-              'name': f'Release {v}',
-              'body': body,
-              'draft': False,
-              'prerelease': False,
-          }))
+
+          payload = json.dumps({
+              "tag_name": tag,
+              "name": f"Release {version}",
+              "body": body,
+              "draft": False,
+              "prerelease": False,
+          }).encode()
+
+          req = urllib.request.Request(
+              f"https://api.github.com/repos/{repo}/releases",
+              data=payload,
+              method="POST",
+              headers={
+                  "Authorization": f"token {token}",
+                  "Content-Type": "application/json",
+                  "Accept": "application/vnd.github+json",
+              },
+          )
+
+          with urllib.request.urlopen(req) as resp:
+              release = json.loads(resp.read().decode())
+
+          if "upload_url" not in release:
+              raise RuntimeError(f"GitHub API did not return upload_url: {release}")
+
+          upload_url = release["upload_url"].split("{")[0]
+
+          files = [
+              f"build/m1_esp32_v{version}.bin",
+              "build/m1_esp32.bin",
+              "build/bootloader/bootloader.bin",
+              "build/partition_table/partition-table.bin",
+          ]
+
+          for file_path in files:
+              name = os.path.basename(file_path)
+              with open(file_path, "rb") as f:
+                  data = f.read()
+
+              upload_req = urllib.request.Request(
+                  f"{upload_url}?name={name}",
+                  data=data,
+                  method="POST",
+                  headers={
+                      "Authorization": f"token {token}",
+                      "Content-Type": "application/octet-stream",
+                      "Accept": "application/vnd.github+json",
+                  },
+              )
+
+              with urllib.request.urlopen(upload_req) as up_resp:
+                  up_resp.read()
           PYEOF
-          )
-
-          RELEASE=$(curl -f -X POST \
-            -H "Authorization: token $GITHUB_TOKEN" \
-            -H "Content-Type: application/json" \
-            "https://api.github.com/repos/$REPO/releases" \
-            -d "$PAYLOAD")
-
-          UPLOAD_URL=$(echo "$RELEASE" | python3 -c "
-          import sys, json
-          print(json.load(sys.stdin)['upload_url'].split('{')[0])
-          ")
-
-          for FILE in \
-            "build/m1_esp32_v${VERSION}.bin" \
-            "build/m1_esp32.bin" \
-            "build/bootloader/bootloader.bin" \
-            "build/partition_table/partition-table.bin"; do
-            NAME=$(basename "$FILE")
-            curl -f -X POST \
-              -H "Authorization: token $GITHUB_TOKEN" \
-              -H "Content-Type: application/octet-stream" \
-              "${UPLOAD_URL}?name=${NAME}" \
-              --data-binary "@$FILE"
-          done
